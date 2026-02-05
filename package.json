@@ -1,0 +1,22 @@
+{
+    "name": "alphaplus-license-manager",
+    "version": "1.0.0",
+    "description": "License Management System for Alpha Plus Applications",
+    "scripts": {
+        "dev": "next dev -p 3003",
+        "build": "next build",
+        "start": "next start -p 3003"
+    },
+    "dependencies": {
+        "next": "^14.0.4",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "@supabase/supabase-js": "^2.39.0",
+        "react-hot-toast": "^2.4.1"
+    },
+    "devDependencies": {
+        "@types/node": "^20.10.0",
+        "@types/react": "^18.2.0",
+        "typescript": "^5.3.0"
+    }
+}
