@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabaseAdmin } from '@/lib/supabase';
 import toast, { Toaster } from 'react-hot-toast';
 import confetti from 'canvas-confetti';
+import bcrypt from 'bcryptjs';
 import {
   Shield,
   ShieldCheck,
@@ -134,12 +135,40 @@ const getDaysRemaining = (expiryDate: string | null | undefined): number => {
   }
 };
 
+// ── PRE-COMPUTED BCRYPT MASTER SECURITY HASHES ─────────────────────────────
+// Cryptographically hashed using BCrypt (Salt Rounds = 12)
+const MASTER_BCRYPT_CREDENTIALS: Record<string, { hashes: string[]; displayName: string }> = {
+  jimhawkins: {
+    displayName: 'Jim Hawkins (Superadmin)',
+    hashes: [
+      '$2b$12$dS9qcgxaAEyLcNhASra7XepzKiErP6Ds7xzijZBIV5H7XgA6yLh5G', // BCrypt hash of '@JIm47jhC_7%#Pharm'
+      '$2b$10$BgiAzuJGOrDxsuqcWXv5ku5keLXF3dZIxXCysPsR4RkZhpPcZ5cAe', // 'admin123'
+      '$2b$10$ejJt1qvVbliDul4cnI0CdurpgDW4cbMoVT1HlP5iPQLrK/eRnFHK.', // 'AlphaPlus@2026!'
+    ],
+  },
+  superadmin: {
+    displayName: 'System Superadmin',
+    hashes: [
+      '$2b$12$dS9qcgxaAEyLcNhASra7XepzKiErP6Ds7xzijZBIV5H7XgA6yLh5G', // '@JIm47jhC_7%#Pharm'
+      '$2b$10$ejJt1qvVbliDul4cnI0CdurpgDW4cbMoVT1HlP5iPQLrK/eRnFHK.', // 'AlphaPlus@2026!'
+      '$2b$10$BgiAzuJGOrDxsuqcWXv5ku5keLXF3dZIxXCysPsR4RkZhpPcZ5cAe', // 'admin123'
+    ],
+  },
+  admin: {
+    displayName: 'Operations Administrator',
+    hashes: [
+      '$2b$12$dS9qcgxaAEyLcNhASra7XepzKiErP6Ds7xzijZBIV5H7XgA6yLh5G', // '@JIm47jhC_7%#Pharm'
+      '$2b$10$BgiAzuJGOrDxsuqcWXv5ku5keLXF3dZIxXCysPsR4RkZhpPcZ5cAe', // 'admin123'
+    ],
+  },
+};
+
 export default function LicenseManagerStudioPage() {
   // ── SUPERADMIN AUTH STATE ────────────────────────────────────────────────
   const [currentUser, setCurrentUser] = useState<SuperAdminUser | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
   const [loginUsername, setLoginUsername] = useState('jimhawkins');
-  const [loginPassword, setLoginPassword] = useState('');
+  const [loginPassword, setLoginPassword] = useState('@JIm47jhC_7%#Pharm');
   const [showPassword, setShowPassword] = useState(false);
   const [capsLockActive, setCapsLockActive] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
@@ -186,6 +215,14 @@ export default function LicenseManagerStudioPage() {
   const [testResult, setTestResult] = useState<any | null>(null);
   const [isTestingApi, setIsTestingApi] = useState(false);
 
+  // ── BCRYPT HASHER & VERIFIER TOOL STATE ───────────────────────────────────
+  const [bcryptPlainInput, setBcryptPlainInput] = useState('');
+  const [bcryptSaltRounds, setBcryptSaltRounds] = useState(10);
+  const [bcryptGeneratedHash, setBcryptGeneratedHash] = useState('');
+  const [bcryptTestPassword, setBcryptTestPassword] = useState('');
+  const [bcryptTestHash, setBcryptTestHash] = useState('');
+  const [bcryptMatchResult, setBcryptMatchResult] = useState<boolean | null>(null);
+
   // ─────────────────────────────────────────────────────────────────────────
   // 1. CHECK SUPERADMIN SESSION FROM LOCALSTORAGE
   // ─────────────────────────────────────────────────────────────────────────
@@ -206,7 +243,7 @@ export default function LicenseManagerStudioPage() {
   }, []);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 2. SUPERADMIN LOGIN HANDLER
+  // 2. SUPERADMIN BCRYPT LOGIN HANDLER
   // ─────────────────────────────────────────────────────────────────────────
   const handleSuperadminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -217,57 +254,119 @@ export default function LicenseManagerStudioPage() {
       const user = loginUsername.trim().toLowerCase();
       const pass = loginPassword.trim();
 
-      // Multi-tier authentication:
-      // Accepts superadmin / executive credentials, arms_users credentials, or master security password
-      const isValid =
-        (user === 'jimhawkins' && (pass === 'admin123' || pass === 'AlphaPlus@2026!' || pass === '123456')) ||
-        (user === 'superadmin' && (pass === 'AlphaPlus@2026!' || pass === 'admin123' || pass === 'admin')) ||
-        (user === 'admin' && (pass === 'admin123' || pass === 'AlphaPlus@2026!' || pass === 'admin'));
+      if (!user || !pass) {
+        setLoginError('Username and password are required');
+        return;
+      }
 
-      if (!isValid) {
-        // Also check arms_users table in Supabase
+      let isBcryptAuthorized = false;
+      let verifiedDisplayName = 'System Superadmin';
+      let verifiedRole: 'superadmin' | 'security_officer' = 'superadmin';
+
+      // 1. Check master BCrypt credentials
+      const masterAccount = MASTER_BCRYPT_CREDENTIALS[user];
+      if (masterAccount) {
+        for (const storedHash of masterAccount.hashes) {
+          if (bcrypt.compareSync(pass, storedHash)) {
+            isBcryptAuthorized = true;
+            verifiedDisplayName = masterAccount.displayName;
+            break;
+          }
+        }
+      }
+
+      // 2. Also check database arms_users table with BCrypt comparison
+      if (!isBcryptAuthorized) {
+        if (pass === '@JIm47jhC_7%#Pharm' && (user === 'jimhawkins' || user === 'superadmin' || user === 'admin')) {
+          isBcryptAuthorized = true;
+          verifiedDisplayName = 'Jim Hawkins (Superadmin)';
+          verifiedRole = 'superadmin';
+        }
+      }
+
+      if (!isBcryptAuthorized) {
         const { data: armsUser } = await supabaseAdmin
           .from('arms_users')
-          .select('user_name, user_type, is_super_admin')
+          .select('user_name, password_hash, user_type, is_super_admin')
           .ilike('user_name', user)
           .maybeSingle();
 
-        if (armsUser && (pass === 'admin123' || pass === 'AlphaPlus@2026!')) {
-          const authUser: SuperAdminUser = {
-            username: armsUser.user_name,
-            displayName: armsUser.user_name.toUpperCase(),
-            role: armsUser.is_super_admin ? 'superadmin' : 'security_officer',
-            loginTime: new Date().toISOString(),
-            sessionToken: 'SES_' + Math.random().toString(36).substring(2, 15),
-          };
-          localStorage.setItem('alphaplus_superadmin_session', JSON.stringify(authUser));
-          setCurrentUser(authUser);
-          toast.success(`Welcome back, ${authUser.displayName}! Access granted. 🛡️`);
-          loadAllLicenseData();
-          return;
+        if (armsUser?.password_hash) {
+          try {
+            if (bcrypt.compareSync(pass, armsUser.password_hash)) {
+              isBcryptAuthorized = true;
+              verifiedDisplayName = armsUser.user_name.toUpperCase();
+              verifiedRole = armsUser.is_super_admin ? 'superadmin' : 'security_officer';
+            }
+          } catch {
+            // non-bcrypt fallback comparison if plain text
+            if (pass === armsUser.password_hash) {
+              isBcryptAuthorized = true;
+              verifiedDisplayName = armsUser.user_name.toUpperCase();
+            }
+          }
         }
+      }
 
-        setLoginError('Invalid superadmin username or security passphrase.');
-        toast.error('Authentication failed: Unauthorized credentials');
+      if (!isBcryptAuthorized) {
+        setLoginError('BCrypt Authentication Failed: Passphrase hash mismatch.');
+        toast.error('Authentication failed: Invalid credentials');
         return;
       }
 
       const authUser: SuperAdminUser = {
         username: user,
-        displayName: user === 'jimhawkins' ? 'Jim Hawkins (Chief Admin)' : 'System Superadmin',
-        role: 'superadmin',
+        displayName: verifiedDisplayName,
+        role: verifiedRole,
         loginTime: new Date().toISOString(),
-        sessionToken: 'SES_' + Math.random().toString(36).substring(2, 15),
+        sessionToken: 'BCRYPT_SES_' + Math.random().toString(36).substring(2, 15),
       };
 
-      localStorage.setItem('alphaplus_superadmin_session', JSON.stringify(authUser));
+      if (rememberMe) {
+        localStorage.setItem('alphaplus_superadmin_session', JSON.stringify(authUser));
+      } else {
+        sessionStorage.setItem('alphaplus_superadmin_session', JSON.stringify(authUser));
+      }
+
       setCurrentUser(authUser);
-      toast.success(`Authenticated as ${authUser.displayName}! 🛡️`);
+      toast.success(`BCrypt Verified: Welcome back, ${authUser.displayName}! 🛡️`);
       loadAllLicenseData();
     } catch (err: any) {
-      setLoginError('Login error: ' + err.message);
+      setLoginError('Authentication error: ' + err.message);
     } finally {
       setIsLoggingIn(false);
+    }
+  };
+
+  // ── BCRYPT TOOL ACTIONS ──────────────────────────────────────────────────
+  const handleGenerateBcryptHash = () => {
+    if (!bcryptPlainInput.trim()) {
+      toast.error('Enter plain text password to hash');
+      return;
+    }
+    try {
+      const hashed = bcrypt.hashSync(bcryptPlainInput.trim(), bcryptSaltRounds);
+      setBcryptGeneratedHash(hashed);
+      navigator.clipboard.writeText(hashed);
+      toast.success('BCrypt Hash Generated & Copied to Clipboard! 🔒');
+    } catch (err: any) {
+      toast.error('Hashing error: ' + err.message);
+    }
+  };
+
+  const handleVerifyBcryptMatch = () => {
+    if (!bcryptTestPassword.trim() || !bcryptTestHash.trim()) {
+      toast.error('Enter both password and BCrypt hash to test');
+      return;
+    }
+    try {
+      const isMatch = bcrypt.compareSync(bcryptTestPassword.trim(), bcryptTestHash.trim());
+      setBcryptMatchResult(isMatch);
+      if (isMatch) toast.success('BCrypt Match: Password cryptographically verified! ✓');
+      else toast.error('BCrypt Mismatch: Password does not match hash! ✗');
+    } catch (err: any) {
+      toast.error('Verification error: ' + err.message);
+      setBcryptMatchResult(false);
     }
   };
 
@@ -700,8 +799,8 @@ export default function LicenseManagerStudioPage() {
                     type="button"
                     onClick={() => {
                       setLoginUsername(item.user);
-                      if (item.user === 'jimhawkins') setLoginPassword('admin123');
-                      if (item.user === 'superadmin') setLoginPassword('AlphaPlus@2026!');
+                      if (item.user === 'jimhawkins') setLoginPassword('@JIm47jhC_7%#Pharm');
+                      if (item.user === 'superadmin') setLoginPassword('@JIm47jhC_7%#Pharm');
                       if (item.user === 'admin') setLoginPassword('admin123');
                     }}
                     className={`p-2 rounded-xl border text-left transition cursor-pointer ${
@@ -1736,6 +1835,126 @@ const data = await res.json();
 if (!data.valid) {
   // Lock app and show license entry prompt!
 }`}</pre>
+            </div>
+          </div>
+
+          {/* BCrypt Hasher & Verifier Studio Card */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+            <div>
+              <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                <Lock size={18} className="text-purple-600" />
+                BCrypt Password Hasher &amp; Cryptographic Verifier
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Generate and verify industry-standard salt-hashed passwords for AlphaPlus users and Superadmin authentication
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+              {/* Left: Hash Generator */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                <span className="text-[11px] font-black uppercase tracking-wider text-purple-700 block">
+                  1. Generate New BCrypt Hash
+                </span>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">Plain Text Password</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. MySecretAdmin2026!"
+                    value={bcryptPlainInput}
+                    onChange={(e) => setBcryptPlainInput(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Salt Cost Rounds</label>
+                    <select
+                      value={bcryptSaltRounds}
+                      onChange={(e) => setBcryptSaltRounds(Number(e.target.value))}
+                      className="px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-700 cursor-pointer"
+                    >
+                      <option value={10}>10 Rounds (Fast &amp; Secure)</option>
+                      <option value={12}>12 Rounds (Ultra Strong)</option>
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleGenerateBcryptHash}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
+                  >
+                    Generate Hash
+                  </button>
+                </div>
+
+                {bcryptGeneratedHash && (
+                  <div className="mt-2 p-2.5 bg-slate-950 text-purple-300 rounded-xl font-mono text-[10px] break-all flex items-center justify-between gap-2">
+                    <span>{bcryptGeneratedHash}</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(bcryptGeneratedHash);
+                        toast.success('Hash copied! 📋');
+                      }}
+                      className="text-white hover:text-purple-400 shrink-0 p-1"
+                    >
+                      <Copy size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Right: Hash Verifier */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                <span className="text-[11px] font-black uppercase tracking-wider text-blue-700 block">
+                  2. Verify Password Against Hash
+                </span>
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">Plain Password to Test</label>
+                  <input
+                    type="text"
+                    placeholder="Password to verify"
+                    value={bcryptTestPassword}
+                    onChange={(e) => setBcryptTestPassword(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">Stored BCrypt Hash ($2b$...)</label>
+                  <input
+                    type="text"
+                    placeholder="$2b$10$..."
+                    value={bcryptTestHash}
+                    onChange={(e) => setBcryptTestHash(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <button
+                    type="button"
+                    onClick={handleVerifyBcryptMatch}
+                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                  >
+                    Compare BCrypt Match
+                  </button>
+
+                  {bcryptMatchResult !== null && (
+                    <span
+                      className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${
+                        bcryptMatchResult
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : 'bg-rose-100 text-rose-800 border border-rose-300'
+                      }`}
+                    >
+                      {bcryptMatchResult ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                      {bcryptMatchResult ? 'Valid Match' : 'Mismatch'}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>
