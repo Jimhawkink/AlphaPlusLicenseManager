@@ -1,10 +1,9 @@
 import type { Metadata } from 'next';
-import { Toaster } from 'react-hot-toast';
 import './globals.css';
 
 export const metadata: Metadata = {
-    title: 'Alpha Plus License Manager',
-    description: 'License Management System',
+    title: 'AlphaPlus Software License & DRM Studio | Enterprise Authority',
+    description: 'Enterprise Hardware Locking, DRM License Provisioning, and Terminal Security for Alpha Retail and Cloud Systems',
 };
 
 export default function RootLayout({
@@ -14,8 +13,7 @@ export default function RootLayout({
 }) {
     return (
         <html lang="en">
-            <body>
-                <Toaster position="top-right" />
+            <body className="bg-slate-100 min-h-screen antialiased selection:bg-blue-600 selection:text-white">
                 {children}
             </body>
         </html>
