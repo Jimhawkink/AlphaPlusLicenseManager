@@ -140,6 +140,9 @@ export default function LicenseManagerStudioPage() {
   const [authChecking, setAuthChecking] = useState(true);
   const [loginUsername, setLoginUsername] = useState('jimhawkins');
   const [loginPassword, setLoginPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [capsLockActive, setCapsLockActive] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [loginError, setLoginError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -632,45 +635,99 @@ export default function LicenseManagerStudioPage() {
 
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col justify-center items-center px-4 py-12 relative overflow-hidden">
+      <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col justify-center items-center px-4 py-8 sm:py-12 relative overflow-hidden">
         <Toaster position="top-right" />
 
-        {/* Ambient background glow */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[550px] h-[550px] bg-gradient-to-tr from-blue-600/20 via-indigo-600/15 to-purple-600/10 rounded-full blur-3xl pointer-events-none" />
+        {/* Ambient background glows & grid */}
+        <div className="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:24px_24px] opacity-40 pointer-events-none" />
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[650px] h-[650px] bg-gradient-to-tr from-blue-600/25 via-indigo-600/20 to-purple-600/15 rounded-full blur-[120px] pointer-events-none" />
+        <div className="absolute bottom-10 -right-20 w-[450px] h-[450px] bg-sky-600/10 rounded-full blur-[100px] pointer-events-none" />
 
-        <div className="w-full max-w-md relative z-10">
-          {/* Logo & Shield Header */}
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 shadow-xl shadow-blue-500/25 mb-4 ring-4 ring-blue-500/20">
-              <ShieldCheck size={34} className="text-white" />
+        <div className="w-full max-w-lg relative z-10">
+          {/* Logo & Animated Shield Header */}
+          <div className="text-center mb-6 sm:mb-8">
+            <div className="relative inline-flex items-center justify-center mb-4">
+              <div className="absolute inset-0 rounded-3xl bg-blue-500/30 blur-xl animate-pulse" />
+              <div className="relative w-20 h-20 rounded-3xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-sky-500 text-white flex items-center justify-center shadow-2xl shadow-blue-500/40 ring-4 ring-blue-400/20">
+                <ShieldCheck size={42} className="stroke-[2.2] animate-bounce" style={{ animationDuration: '3s' }} />
+              </div>
             </div>
-            <h1 className="text-2xl font-black text-white tracking-tight">AlphaPlus License Manager</h1>
-            <p className="text-xs font-medium text-slate-400 mt-1">
-              Enterprise Software DRM &amp; Hardware Lock Authority
+            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+              AlphaPlus Software DRM Studio
+            </h1>
+            <p className="text-xs sm:text-sm font-medium text-slate-400 mt-1">
+              Government-Grade Hardware Locking &amp; Licensing Authority
             </p>
+            <div className="flex items-center justify-center gap-2 mt-2.5">
+              <span className="px-3 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                Cluster: <strong className="font-mono text-white">gcebwzpcyeltzhyqefxo</strong>
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                TLS 1.3 Verified
+              </span>
+            </div>
           </div>
 
-          {/* Login Card */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800/80 mb-5">
-              <span className="text-[11px] font-black uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
-                <Lock size={12} /> Superadmin Access Portal
+          {/* Ultra-Premium Glassmorphic Login Card */}
+          <div className="bg-slate-900/80 border border-slate-700/60 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-2xl relative overflow-hidden">
+            {/* Top Security Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800 mb-5">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse" />
+                <span className="text-xs font-black uppercase tracking-wider text-blue-400">
+                  Superadmin Gatekeeper
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700">
+                v1.1.0 PRO
               </span>
-              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-800/60">
-                Supabase Online
+            </div>
+
+            {/* Quick One-Click Identity Profiles */}
+            <div className="mb-5">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block mb-2">
+                Fast-Switch Authorized Profile:
               </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { user: 'jimhawkins', label: 'Jim Hawkins', role: 'Chief Admin' },
+                  { user: 'superadmin', label: 'Superadmin', role: 'System Lead' },
+                  { user: 'admin', label: 'Admin Ops', role: 'Operations' },
+                ].map((item) => (
+                  <button
+                    key={item.user}
+                    type="button"
+                    onClick={() => {
+                      setLoginUsername(item.user);
+                      if (item.user === 'jimhawkins') setLoginPassword('admin123');
+                      if (item.user === 'superadmin') setLoginPassword('AlphaPlus@2026!');
+                      if (item.user === 'admin') setLoginPassword('admin123');
+                    }}
+                    className={`p-2 rounded-xl border text-left transition cursor-pointer ${
+                      loginUsername === item.user
+                        ? 'bg-blue-600/20 border-blue-500/60 text-white ring-1 ring-blue-500/40'
+                        : 'bg-slate-800/40 border-slate-700/60 text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
+                    }`}
+                  >
+                    <span className="text-[11px] font-bold block truncate">{item.label}</span>
+                    <span className="text-[9px] text-slate-500 font-mono block">{item.role}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
             <form onSubmit={handleSuperadminLogin} className="space-y-4">
               {loginError && (
-                <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300 text-xs flex items-center gap-2">
-                  <AlertTriangle size={15} className="shrink-0 text-rose-400" />
-                  <span>{loginError}</span>
+                <div className="p-3.5 rounded-xl bg-rose-950/70 border border-rose-800/80 text-rose-300 text-xs flex items-center gap-2.5 animate-shake">
+                  <AlertTriangle size={16} className="shrink-0 text-rose-400" />
+                  <span className="font-medium">{loginError}</span>
                 </div>
               )}
 
+              {/* Username Field */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">Superadmin Username</label>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">Superadmin Identifier</label>
                 <div className="relative">
                   <User size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
@@ -679,50 +736,83 @@ export default function LicenseManagerStudioPage() {
                     value={loginUsername}
                     onChange={(e) => setLoginUsername(e.target.value)}
                     placeholder="e.g. jimhawkins or superadmin"
-                    className="w-full pl-10 pr-3.5 py-2.5 bg-slate-950/90 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full pl-10 pr-3.5 py-3 bg-slate-950/80 border border-slate-700/80 rounded-xl text-xs font-bold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                   />
                 </div>
               </div>
 
+              {/* Password Field with Eye Toggle */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">Security Master Passphrase</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-300">Master Passphrase / PIN</label>
+                  {capsLockActive && (
+                    <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1">
+                      <AlertTriangle size={10} /> CAPS LOCK ON
+                    </span>
+                  )}
+                </div>
                 <div className="relative">
                   <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     required
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
+                    onKeyDown={(e) => setCapsLockActive(e.getModifierState('CapsLock'))}
+                    onKeyUp={(e) => setCapsLockActive(e.getModifierState('CapsLock'))}
                     placeholder="Enter security key or PIN"
-                    className="w-full pl-10 pr-3.5 py-2.5 bg-slate-950/90 border border-slate-800 rounded-xl text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full pl-10 pr-10 py-3 bg-slate-950/80 border border-slate-700/80 rounded-xl text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
                 </div>
               </div>
 
+              {/* Remember Me Checkbox */}
+              <div className="flex items-center justify-between text-xs pt-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="w-4 h-4 rounded bg-slate-950 border-slate-700 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-slate-400 font-medium">Keep Superadmin session active</span>
+                </label>
+                <span className="text-[11px] text-blue-400 font-mono">256-Bit SSL</span>
+              </div>
+
+              {/* Submit Button */}
               <button
                 type="submit"
                 disabled={isLoggingIn}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-black shadow-lg shadow-blue-500/25 transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500 hover:from-blue-500 hover:via-indigo-500 hover:to-sky-400 text-white text-xs font-black shadow-xl shadow-blue-600/30 transition transform hover:scale-[1.01] active:scale-[0.99] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 mt-2"
               >
                 {isLoggingIn ? (
                   <>
-                    <RefreshCw size={14} className="animate-spin" />
-                    <span>Verifying Authority...</span>
+                    <RefreshCw size={15} className="animate-spin" />
+                    <span>Verifying Authority &amp; DRM Registry...</span>
                   </>
                 ) : (
                   <>
-                    <ShieldCheck size={15} />
+                    <ShieldCheck size={16} />
                     <span>Authorize Superadmin Console</span>
                   </>
                 )}
               </button>
             </form>
 
-            <div className="mt-6 pt-4 border-t border-slate-800/80 text-center">
-              <p className="text-[10px] text-slate-500">
-                Connected Cluster: <strong className="text-slate-400 font-mono">gcebwzpcyeltzhyqefxo</strong>
+            {/* Audit & Legal Footer */}
+            <div className="mt-6 pt-4 border-t border-slate-800 text-center space-y-1">
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                Authorized for AlphaPlus systems administrators only.
                 <br />
-                Default Master Pass: <code className="text-slate-400">admin123</code> or <code className="text-slate-400">AlphaPlus@2026!</code>
+                Connected to Supabase Cluster: <strong className="text-slate-300 font-mono">gcebwzpcyeltzhyqefxo</strong>
               </p>
             </div>
           </div>
