@@ -759,6 +759,9 @@ export default function LicenseManagerStudioPage() {
                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border bg-blue-50 text-blue-700 border-blue-200">
                   Cluster: gcebwzpcyeltzhyqefxo
                 </span>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border bg-purple-50 text-purple-700 border-purple-200">
+                  v1.1.0 Enterprise
+                </span>
               </div>
               <p className="text-xs text-slate-500 font-medium mt-0.5">
                 Hardware terminal lock &bull; Web &amp; Desktop validation API &bull; Multi-tier license provisioning
