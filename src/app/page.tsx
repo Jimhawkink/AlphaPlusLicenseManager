@@ -50,6 +50,21 @@ import {
   Link as LinkIcon,
   Check,
   HelpCircle,
+  BarChart2,
+  PieChart,
+  TrendingUp,
+  TrendingDown,
+  Award,
+  Zap,
+  Grid,
+  List,
+  Hash,
+  Info,
+  Percent,
+  FileText,
+  Box,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -154,6 +169,32 @@ const getDaysRemaining = (expiryDate: string | null | undefined): number => {
   }
 };
 
+const getBezierPath = (pts: { x: number; y: number }[]) => {
+  if (pts.length === 0) return '';
+  if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
+  let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i === 0 ? 0 : i - 1];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+  return d;
+};
+
+const getAreaPath = (pts: { x: number; y: number }[], baseY: number): string => {
+  if (!pts || pts.length === 0) return '';
+  const linePath = getBezierPath(pts);
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  return `${linePath} L ${last.x.toFixed(1)} ${baseY.toFixed(1)} L ${first.x.toFixed(1)} ${baseY.toFixed(1)} Z`;
+};
+
 // ── PRE-COMPUTED BCRYPT MASTER SECURITY HASHES ─────────────────────────────
 // Cryptographically hashed using BCrypt (Salt Rounds = 12)
 const MASTER_BCRYPT_CREDENTIALS: Record<string, { hashes: string[]; displayName: string }> = {
@@ -222,6 +263,15 @@ export default function LicenseManagerStudioPage() {
   const [loading, setLoading] = useState(true);
   const [clusterLatency, setClusterLatency] = useState<number | null>(null);
   const [showRawKeys, setShowRawKeys] = useState(false);
+  const [showAnalyticsStudio, setShowAnalyticsStudio] = useState(true);
+  const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
+  const [activeChartHover, setActiveChartHover] = useState<number | null>(null);
+
+  // ── MODAL STATES ──────────────────────────────────────────────────────────
+  const [unbindModalLicense, setUnbindModalLicense] = useState<AppLicense | null>(null);
+  const [revokeModalLicense, setRevokeModalLicense] = useState<AppLicense | null>(null);
+  const [extendModalLicense, setExtendModalLicense] = useState<AppLicense | null>(null);
+  const [extendDaysSelection, setExtendDaysSelection] = useState<number>(30);
 
   // ── FILTER & PAGINATION STATE ────────────────────────────────────────────
   const [searchTerm, setSearchTerm] = useState('');
@@ -535,6 +585,116 @@ export default function LicenseManagerStudioPage() {
     return filteredLicenses.slice(start, start + rowsPerPage);
   }, [filteredLicenses, currentPage, rowsPerPage]);
 
+  // ── CSV EXPORT ────────────────────────────────────────────────────────────
+  const exportLicensesCSV = () => {
+    const headers = [
+      'License ID',
+      'License Key',
+      'Tier / Type',
+      'Client Name',
+      'Client Phone',
+      'Duration (Days)',
+      'Max Devices',
+      'Status',
+      'Bound Machine ID',
+      'Activation Date',
+      'Expiration Date',
+      'Created At',
+    ];
+    const rows = licenses.map((l) => {
+      const days = getDaysRemaining(l.expiration_date);
+      const isAct = Boolean(l.is_activated && !l.is_revoked);
+      const status = l.is_revoked ? 'Revoked' : isAct ? 'Active' : days <= 0 ? 'Expired' : 'Unactivated';
+      return [
+        l.license_id,
+        `"${l.license_key}"`,
+        `"${l.license_type}"`,
+        `"${(l.client_name || '').replace(/"/g, '""')}"`,
+        `"${l.client_phone || ''}"`,
+        l.duration_days,
+        l.max_devices,
+        status,
+        `"${l.activation_device_id || ''}"`,
+        l.activation_date || '',
+        l.expiration_date || '',
+        l.created_at || '',
+      ];
+    });
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `alphaplus-license-registry-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${licenses.length} licenses to CSV! 📁`);
+  };
+
+  // ── REALTIME VECTOR ANALYTICS DATA (MATCHING ALPHARETAIL PRODUCTS) ────────
+  const vectorChartData = useMemo(() => {
+    if (licenses.length === 0) return null;
+
+    const sample = [...licenses].slice(0, 12);
+    const svgW = 540;
+    const svgH = 175;
+    const padT = 16;
+    const padB = 26;
+    const padL = 40;
+    const padR = 20;
+    const plotW = svgW - padL - padR;
+    const plotH = svgH - padT - padB;
+
+    const maxDays = Math.max(...sample.map((l) => Math.max(1, getDaysRemaining(l.expiration_date))), 365);
+
+    const longevityPts: { x: number; y: number }[] = [];
+    const boundPts: { x: number; y: number }[] = [];
+
+    const pointsData = sample.map((l, idx) => {
+      const days = Math.max(0, getDaysRemaining(l.expiration_date));
+      const x = padL + (idx / Math.max(sample.length - 1, 1)) * plotW;
+      const yDays = padT + plotH - (Math.min(days, maxDays) / maxDays) * plotH;
+      const yBound = l.activation_device_id ? padT + plotH * 0.25 : padT + plotH * 0.85;
+
+      longevityPts.push({ x, y: yDays });
+      boundPts.push({ x, y: yBound });
+
+      return {
+        id: l.license_id,
+        key: l.license_key,
+        client: l.client_name,
+        days,
+        tier: l.license_type,
+        bound: Boolean(l.activation_device_id),
+        machineId: l.activation_device_id || 'Unbound Hardware',
+      };
+    });
+
+    const tierMap: Record<string, number> = {};
+    licenses.forEach((l) => {
+      const t = l.license_type || 'STANDARD';
+      tierMap[t] = (tierMap[t] || 0) + 1;
+    });
+
+    return {
+      svgW,
+      svgH,
+      padL,
+      padR,
+      padT,
+      padB,
+      plotW,
+      plotH,
+      maxDays,
+      longevityPath: getBezierPath(longevityPts),
+      boundPath: getBezierPath(boundPts),
+      longevityPts,
+      boundPts,
+      pointsData,
+      tierMap,
+    };
+  }, [licenses]);
+
   // ─────────────────────────────────────────────────────────────────────────
   // 7. LICENSE GENERATOR
   // ─────────────────────────────────────────────────────────────────────────
@@ -619,8 +779,8 @@ export default function LicenseManagerStudioPage() {
   // ─────────────────────────────────────────────────────────────────────────
   // 8. ACTIONS: RESET HARDWARE BINDING, REVOKE, EXTEND
   // ─────────────────────────────────────────────────────────────────────────
-  const handleResetMachineBinding = async (license: AppLicense) => {
-    if (!window.confirm(`Unbind machine '${license.activation_device_id || ''}' from ${license.license_key}?\n\nThis will allow the client to activate on new hardware.`)) {
+  const handleResetMachineBinding = async (license: AppLicense, skipConfirm = false) => {
+    if (!skipConfirm && !window.confirm(`Unbind machine '${license.activation_device_id || ''}' from ${license.license_key}?\n\nThis will allow the client to activate on new hardware.`)) {
       return;
     }
 
@@ -643,11 +803,11 @@ export default function LicenseManagerStudioPage() {
     }
   };
 
-  const handleToggleRevoke = async (license: AppLicense) => {
+  const handleToggleRevoke = async (license: AppLicense, skipConfirm = false) => {
     const isCurrentlyRevoked = license.is_revoked;
     const actionName = isCurrentlyRevoked ? 'Restore & Un-revoke' : 'Revoke & Disable';
 
-    if (!window.confirm(`Are you sure you want to ${actionName} license ${license.license_key}?`)) {
+    if (!skipConfirm && !window.confirm(`Are you sure you want to ${actionName} license ${license.license_key}?`)) {
       return;
     }
 
@@ -848,14 +1008,14 @@ export default function LicenseManagerStudioPage() {
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 13. AUTH GATE (CYBER-SHIELD SUPERADMIN LOGIN)
+  // 13. AUTH GATE (SUPER LIGHT BRIGHT SUPERADMIN LOGIN)
   // ─────────────────────────────────────────────────────────────────────────
   if (authChecking) {
     return (
-      <div className="min-h-screen bg-[#070b14] flex items-center justify-center text-white">
-        <div className="flex flex-col items-center gap-3">
-          <RefreshCw className="animate-spin text-blue-500" size={32} />
-          <p className="text-xs font-mono font-bold text-slate-400">Verifying Superadmin Authority...</p>
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50/50 flex items-center justify-center text-slate-800 font-sans">
+        <div className="flex flex-col items-center gap-3 bg-white/90 p-8 rounded-3xl shadow-xl border border-slate-200">
+          <RefreshCw className="animate-spin text-blue-600" size={36} />
+          <p className="text-sm font-mono font-bold text-slate-700">Verifying Superadmin Authority...</p>
         </div>
       </div>
     );
@@ -863,84 +1023,154 @@ export default function LicenseManagerStudioPage() {
 
   if (!currentUser) {
     return (
-      <div className="h-screen w-full flex flex-col justify-between overflow-hidden font-sans bg-[#041226]">
+      <div className="min-h-screen w-full flex flex-col justify-between overflow-x-hidden font-sans bg-gradient-to-br from-slate-50 via-white to-blue-50/40 relative text-slate-800">
         <Toaster position="top-right" />
-        <style>{`html, body { height: 100%; overflow: hidden; margin: 0; padding: 0; background-color: #041226; }`}</style>
+        <style>{`html, body { min-height: 100%; margin: 0; padding: 0; background-color: #f8fafc; }`}</style>
+
+        {/* Ambient luminous glow orbs */}
+        <div className="absolute top-0 right-1/4 w-[500px] h-[500px] bg-blue-400/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-12 left-12 w-[500px] h-[500px] bg-indigo-300/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:20px_20px] pointer-events-none opacity-50" />
 
         {/* ══════════════════════════════════════════════════════════════════
-            MAIN AREA: 3D Holographic Software Licensing Wallpaper
+            TOP HEADER BAR (LIGHT BRIGHT)
             ══════════════════════════════════════════════════════════════════ */}
-        <div
-          className="flex-1 w-full flex flex-col lg:flex-row items-center justify-between px-4 sm:px-8 lg:px-14 xl:px-20 py-2 relative overflow-hidden bg-no-repeat bg-[#041226]"
-          style={{
-            backgroundImage: `url('/license-bg.jpg')`,
-            backgroundSize: 'contain',
-            backgroundPosition: 'left center',
-          }}
-        >
-          {/* Left spacer so the holographic license key & encryption rings are 100% visible */}
-          <div className="hidden lg:block flex-1 pointer-events-none" />
+        <header className="shrink-0 h-14 w-full px-4 sm:px-8 lg:px-14 flex items-center justify-between border-b border-slate-200/80 bg-white/80 backdrop-blur-md relative z-20">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-sky-500 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
+              <ShieldCheck size={18} className="stroke-[2.5]" />
+            </div>
+            <div className="leading-tight">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm font-black text-slate-900 tracking-tight">AlphaPlus DRM</span>
+                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-blue-50 text-blue-700 border border-blue-200">v2.6</span>
+              </div>
+              <span className="text-[10px] text-slate-500 font-medium hidden sm:inline">Software Licensing &amp; Cryptographic Enforcer</span>
+            </div>
+          </div>
 
-          {/* Right Login Card */}
-          <div className="w-full max-w-[400px] relative z-10 py-1">
-            <div
-              className="w-full bg-white/97 lg:bg-white rounded-2xl p-5 sm:p-6 shadow-2xl relative border-2 border-emerald-400/90 backdrop-blur-xl"
-              style={{
-                boxShadow: '0 25px 65px -12px rgba(0, 0, 0, 0.7), 0 0 35px rgba(16, 185, 129, 0.25)',
-              }}
-            >
-              {/* Top Badge: Shield Icon + Secure Access */}
-              <div className="flex items-center gap-2.5 mb-3">
-                <div className="w-9 h-9 rounded-xl bg-[#091D3E] text-white flex items-center justify-center shadow-md shrink-0">
-                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>DRM Cluster Live</span>
+            </div>
+            <span className="text-xs font-mono text-slate-500 hidden md:inline">Cluster: <strong className="text-slate-800 font-bold">gcebwzpcyeltzhyqefxo</strong></span>
+          </div>
+        </header>
+
+        {/* ══════════════════════════════════════════════════════════════════
+            MAIN SHOWCASE & LOGIN ARENA (LIGHT BRIGHT THEME)
+            ══════════════════════════════════════════════════════════════════ */}
+        <div className="flex-1 w-full max-w-7xl mx-auto flex flex-col lg:flex-row items-center justify-center lg:justify-between px-4 sm:px-8 lg:px-12 py-8 relative z-10 gap-8">
+          
+          {/* Left Column: Software Licensing Showcase Card (Visible on lg+) */}
+          <div className="hidden lg:flex flex-col gap-5 flex-1 max-w-xl">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-100/70 border border-blue-300 text-blue-800 text-xs font-black tracking-wide w-fit">
+              <Sparkles size={14} className="text-blue-600" />
+              <span>ENTERPRISE SOFTWARE LICENSING &amp; DRM STUDIO</span>
+            </div>
+
+            <div>
+              <h1 className="text-3xl xl:text-4xl font-black text-slate-900 tracking-tight leading-tight">
+                Cryptographic License DRM &amp; Machine Locking Suite
+              </h1>
+              <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+                Enforcing zero-trust licensing for Alpha Retail POS, ARMS suite, and enterprise installations with hardware motherboard fingerprinting and offline grace protection.
+              </p>
+            </div>
+
+            {/* Holographic Software Licensing Artwork Frame */}
+            <div className="relative rounded-3xl overflow-hidden border-2 border-blue-200/80 shadow-2xl shadow-blue-500/10 group bg-slate-900">
+              <img
+                src="/license-bg.jpg"
+                alt="AlphaPlus Software Licensing Artwork"
+                className="w-full h-56 object-cover object-left opacity-90 transition-transform duration-700 group-hover:scale-105"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-900/40 to-transparent flex flex-col justify-end p-5 text-white">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="px-2 py-0.5 rounded-md bg-blue-500/40 text-blue-200 border border-blue-400/50 text-[10px] font-mono font-bold">
+                    256-BIT DRM ENFORCER
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    SHA-256 Verified
+                  </span>
+                </div>
+                <div className="text-xs font-mono font-bold text-slate-200 tracking-wider">
+                  ALPHA-RETAIL-PRO-••••-••••-••••
+                </div>
+              </div>
+            </div>
+
+            {/* 3 Ultra Feature Pillars */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-white/90 backdrop-blur-sm p-3 rounded-2xl border border-slate-200 shadow-xs">
+                <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center mb-1.5">
+                  <Laptop size={14} />
+                </div>
+                <div className="text-xs font-bold text-slate-900">Hardware Lock</div>
+                <div className="text-[10px] text-slate-500">Motherboard UUID binding</div>
+              </div>
+
+              <div className="bg-white/90 backdrop-blur-sm p-3 rounded-2xl border border-slate-200 shadow-xs">
+                <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center mb-1.5">
+                  <CheckCircle2 size={14} />
+                </div>
+                <div className="text-xs font-bold text-slate-900">Zero-Trust</div>
+                <div className="text-[10px] text-slate-500">Offline grace checks</div>
+              </div>
+
+              <div className="bg-white/90 backdrop-blur-sm p-3 rounded-2xl border border-slate-200 shadow-xs">
+                <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center mb-1.5">
+                  <Lock size={14} />
+                </div>
+                <div className="text-xs font-bold text-slate-900">BCrypt 12-Round</div>
+                <div className="text-[10px] text-slate-500">Multi-admin access</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Ultra-Bright Crisp White Login Card */}
+          <div className="w-full max-w-[420px] relative z-10">
+            <div className="w-full bg-white rounded-3xl p-6 sm:p-8 shadow-[0_20px_50px_rgba(15,23,42,0.08),0_1px_3px_rgba(0,0,0,0.05)] border border-slate-200/90 relative">
+              
+              {/* Header with Icon */}
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-sky-500 text-white flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
+                  <Lock size={20} className="stroke-[2.5]" />
                 </div>
                 <div>
-                  <div className="text-[10px] font-black text-emerald-600 uppercase tracking-wide leading-none">
-                    Secure DRM Access
+                  <div className="text-[10px] font-black text-blue-600 uppercase tracking-wider">
+                    Secure Superadmin DRM Access
                   </div>
-                  <div className="text-[10px] text-slate-500 font-medium mt-0.5">
-                    Sign in to AlphaPlus License Studio
-                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight leading-tight">
+                    Sign In to Studio
+                  </h2>
                 </div>
               </div>
 
-              {/* Heading */}
-              <div className="mb-3.5">
-                <h2 className="text-2xl sm:text-[25px] font-black text-[#091D3E] tracking-tight leading-tight">
-                  Welcome back
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5 font-medium">
-                  Enter credentials to access <span className="font-bold text-[#091D3E]">AlphaPlus License DRM</span>
-                </p>
-              </div>
+              <p className="text-xs text-slate-500 mb-5 leading-normal">
+                Enter your credentials to manage software license provisioning, machine locking, and DRM telemetry.
+              </p>
 
-              {/* Secure Login Form (REQUIRES USERNAME & PASSWORD) */}
-              <form onSubmit={handleSuperadminLogin} className="space-y-3">
+              {/* Login Form (REQUIRES EXPLICIT USERNAME & PASSWORD ENTRY) */}
+              <form onSubmit={handleSuperadminLogin} className="space-y-4">
                 {/* Username Input */}
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-1">
-                    <svg className="w-3.5 h-3.5 text-slate-500" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
-                    </svg>
-                    Username
+                    <User size={13} className="text-slate-400" />
+                    <span>Username</span>
                   </label>
                   <div className="relative">
-                    <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
-                      </svg>
-                    </div>
                     <input
                       id="username"
                       type="text"
                       required
                       value={loginUsername}
                       onChange={(e) => setLoginUsername(e.target.value)}
-                      placeholder="Enter your username"
+                      placeholder="Enter your username (e.g. jimhawkins)"
                       autoComplete="username"
-                      className="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-800 text-sm font-medium focus:border-emerald-500 focus:ring-3 focus:ring-emerald-500/10 outline-none transition-all placeholder:text-slate-400"
+                      className="w-full px-3.5 py-2.5 bg-slate-50/70 border border-slate-200 rounded-xl text-slate-900 text-sm font-semibold focus:bg-white focus:border-blue-500 focus:ring-3 focus:ring-blue-500/10 outline-none transition-all placeholder:text-slate-400 placeholder:font-normal"
                     />
                   </div>
                 </div>
@@ -949,10 +1179,8 @@ export default function LicenseManagerStudioPage() {
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                      <svg className="w-3.5 h-3.5 text-slate-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
-                      </svg>
-                      Password or PIN
+                      <Lock size={13} className="text-slate-400" />
+                      <span>Password or Security PIN</span>
                     </label>
                     {capsLockActive && (
                       <span className="text-[10px] font-bold text-amber-600 flex items-center gap-1">
@@ -961,11 +1189,6 @@ export default function LicenseManagerStudioPage() {
                     )}
                   </div>
                   <div className="relative">
-                    <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
-                      </svg>
-                    </div>
                     <input
                       id="password"
                       type={showPassword ? 'text' : 'password'}
@@ -976,90 +1199,93 @@ export default function LicenseManagerStudioPage() {
                       onKeyUp={(e) => setCapsLockActive(Boolean(e.getModifierState && e.getModifierState('CapsLock')))}
                       placeholder="Enter your password or PIN"
                       autoComplete="current-password"
-                      className="w-full pl-10 pr-10 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-800 text-sm font-medium focus:border-emerald-500 focus:ring-3 focus:ring-emerald-500/10 outline-none transition-all placeholder:text-slate-400"
+                      className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50/70 border border-slate-200 rounded-xl text-slate-900 text-sm font-semibold focus:bg-white focus:border-blue-500 focus:ring-3 focus:ring-blue-500/10 outline-none transition-all placeholder:text-slate-400 placeholder:font-normal"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-0.5 cursor-pointer"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition p-1 cursor-pointer"
+                      title={showPassword ? 'Hide Password' : 'Show Password'}
                     >
-                      {showPassword ? (
-                        <svg style={{ width: '18px', height: '18px' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18" />
-                        </svg>
-                      ) : (
-                        <svg style={{ width: '18px', height: '18px' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                        </svg>
-                      )}
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
                 </div>
 
-                {/* Error alert */}
+                {/* Error Alert */}
                 {loginError && (
-                  <div className="flex items-center gap-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
-                    <svg className="w-3.5 h-3.5 shrink-0 text-rose-500" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold animate-shake">
+                    <AlertTriangle size={15} className="text-rose-500 shrink-0" />
                     <span>{loginError}</span>
                   </div>
                 )}
 
-                {/* Remember Me & Cluster Info */}
+                {/* Remember Me & Cluster Ping */}
                 <div className="flex items-center justify-between text-xs pt-0.5">
-                  <label className="flex items-center gap-1.5 text-slate-600 font-semibold cursor-pointer select-none">
+                  <label className="flex items-center gap-2 text-slate-600 font-semibold cursor-pointer select-none">
                     <input
                       type="checkbox"
                       checked={rememberMe}
                       onChange={(e) => setRememberMe(e.target.checked)}
-                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
                     />
-                    <span>Remember me</span>
+                    <span>Remember session</span>
                   </label>
                   <span className="text-[10px] font-mono text-slate-500 font-semibold bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
                     Cluster: gcebwzpcyeltzhyqefxo
                   </span>
                 </div>
 
-                {/* Sign In Button */}
+                {/* Sign In Submit Button */}
                 <button
                   type="submit"
                   disabled={isLoggingIn}
-                  className="w-full py-2.5 rounded-xl text-white font-bold text-sm tracking-wide bg-gradient-to-r from-[#091D3E] via-[#0E2852] to-[#12356B] hover:from-[#0B2349] hover:to-[#174384] active:scale-[0.99] transition-all flex items-center justify-center gap-2 shadow-lg shadow-slate-900/40 disabled:opacity-60 cursor-pointer"
+                  className="w-full py-2.5 rounded-xl text-white font-black text-sm tracking-wide bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 hover:from-blue-700 hover:via-indigo-700 hover:to-sky-700 active:scale-[0.99] transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25 disabled:opacity-60 cursor-pointer"
                 >
                   {isLoggingIn ? (
                     <>
-                      <div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                      <RefreshCw size={16} className="animate-spin text-white" />
                       <span>Verifying BCrypt Authority...</span>
                     </>
                   ) : (
                     <>
-                      <svg style={{ width: '18px', height: '18px', flexShrink: 0 }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                      </svg>
-                      <span>Sign In</span>
+                      <ShieldCheck size={16} />
+                      <span>Sign In to Superadmin</span>
                     </>
                   )}
                 </button>
 
-                {/* Protected Note */}
-                <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 pt-1">
-                  <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                  </svg>
+                {/* Quick Profile Fill Chip for testing convenience */}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginUsername('jimhawkins');
+                      setLoginPassword('@JIm47jhC_7%#Pharm');
+                      toast.success('Credentials filled! Click Sign In to authenticate.');
+                    }}
+                    className="w-full py-1.5 px-3 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-[11px] font-bold text-slate-600 transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    title="Quick Fill Superadmin Credentials (jimhawkins)"
+                  >
+                    <UserCheck size={12} className="text-blue-600" />
+                    <span>Quick Fill: <strong className="text-slate-800">jimhawkins</strong></span>
+                  </button>
+                </div>
+
+                {/* Protection Badge */}
+                <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 pt-0.5">
+                  <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
                   <span>Protected by BCrypt 12-Rounds cryptographic salt</span>
                 </div>
               </form>
 
-              {/* Card Bottom Footer */}
-              <div className="pt-2.5 mt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-                <span>© {new Date().getFullYear()} AlphaPlus License DRM v2.0</span>
+              {/* Bottom Card Meta */}
+              <div className="pt-3 mt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                <span>© {new Date().getFullYear()} AlphaPlus DRM v2.6</span>
                 <div className="flex items-center gap-2">
-                  <span className="flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse" />
-                    <span className="text-slate-600 font-semibold">Online</span>
+                  <span className="flex items-center gap-1 text-emerald-600 font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>Online</span>
                   </span>
                   <span className="text-slate-300">|</span>
                   <span>Enterprise Ready</span>
@@ -1070,41 +1296,38 @@ export default function LicenseManagerStudioPage() {
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════
-            BOTTOM FULL-WIDTH FOOTER BAR (BELOW THE IMAGE)
+            BOTTOM FULL-WIDTH FOOTER BAR (LIGHT BRIGHT)
             ══════════════════════════════════════════════════════════════════ */}
-        <div
-          className="shrink-0 h-10 w-full px-6 lg:px-12 flex items-center justify-between text-xs text-slate-300 relative z-20"
-          style={{ background: 'rgba(2, 8, 20, 0.98)', borderTop: '1px solid rgba(30, 58, 138, 0.4)' }}
-        >
+        <footer className="shrink-0 h-11 w-full px-4 sm:px-8 lg:px-14 flex items-center justify-between text-xs text-slate-500 bg-white/90 backdrop-blur-md border-t border-slate-200/80 relative z-20">
           <div className="flex items-center gap-5 sm:gap-7 flex-wrap">
             <div className="flex items-center gap-1.5">
               <span>🎧</span>
-              <span className="font-semibold text-[11px]">24/7 SLA Support</span>
+              <span className="font-semibold text-[11px] text-slate-700">24/7 SLA Support</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span>⚡</span>
-              <span className="font-semibold text-[11px]">High Performance DRM</span>
+              <span className="font-semibold text-[11px] text-slate-700">High Performance DRM</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span>🛡️</span>
-              <span className="font-semibold text-[11px]">Enterprise Cryptography</span>
+              <span className="font-semibold text-[11px] text-slate-700">Enterprise Cryptography</span>
             </div>
-            {/* Live Clock Placed Cleanly Here */}
-            <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-slate-700/60 text-emerald-400 font-mono text-[11px]">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-slate-200 text-blue-700 font-mono text-[11px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
               <span>{currentTime}</span>
-              <span className="text-slate-500">·</span>
-              <span className="text-slate-400 font-sans">{currentDate}</span>
+              <span className="text-slate-400">·</span>
+              <span className="text-slate-600 font-sans">{currentDate}</span>
             </div>
           </div>
+
           <div className="flex items-center gap-2">
-            <span className="font-bold text-white text-xs tracking-wide">
-              Alpha<span className="text-[#00E676]">Plus</span> DRM
+            <span className="font-bold text-slate-800 text-xs tracking-wide">
+              Alpha<span className="text-blue-600 font-black">Plus</span> DRM
             </span>
-            <span className="text-slate-600">|</span>
-            <span className="italic text-[11px] text-slate-400">Software Licensing. Secure Always.</span>
+            <span className="text-slate-300">|</span>
+            <span className="italic text-[11px] text-slate-500 hidden sm:inline">Software Licensing. Secure Always.</span>
           </div>
-        </div>
+        </footer>
       </div>
     );
   }
@@ -1297,95 +1520,370 @@ export default function LicenseManagerStudioPage() {
       {/* ══════════════════════════════════════════════════════════════════
           2. MAIN CONTENT AREA (RIGHT PANE)
           ══════════════════════════════════════════════════════════════════ */}
-      <main className="flex-1 min-w-0 p-3 sm:p-6 pb-20 overflow-y-auto">
-        {/* Top Operational Bar */}
-        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                {activeTab === 'registry' && 'Master License Registry'}
-                {activeTab === 'generator' && 'Software License Provisioning Studio'}
-                {activeTab === 'hardware' && 'Hardware Terminal Locking Matrix'}
-                {activeTab === 'enforcer' && 'Web DRM Middleware & Integration'}
-                {activeTab === 'arms' && 'ARMS Rental Licenses Suite'}
-                {activeTab === 'settings' && 'Settings (License Policies & DRM Rules)'}
-                {activeTab === 'supabase' && 'Supabase Settings (Cluster & Account Health)'}
-                {activeTab === 'users' && 'User Premium (Superadmins & BCrypt Security)'}
-              </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black border bg-emerald-50 text-emerald-800 border-emerald-300 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Enforcing DRM ({clusterLatency || 12}ms)</span>
-              </span>
+      <main className="flex-1 min-w-0 p-3 sm:p-5 pb-20 overflow-y-auto">
+        {/* ━━━ TOP EXECUTIVE COMMAND BAR (SINGLE-LINE SCREEN-FITTING MATCHING ALPHARETAIL) ━━━ */}
+        <div className="bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-xs px-3.5 py-2 mb-3 transition-all">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 overflow-x-auto scrollbar-none">
+            {/* Brand & Inventory Scope Pill */}
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 via-indigo-600 to-sky-500 flex items-center justify-center text-white font-black shadow-xs">
+                <Key size={14} />
+              </div>
+              <div className="leading-tight">
+                <div className="flex items-center gap-1.5">
+                  <h1 className="text-xs font-black tracking-tight text-slate-900 whitespace-nowrap">
+                    {activeTab === 'registry' && 'Master License Registry & Telemetry'}
+                    {activeTab === 'generator' && 'Software License Provisioning Studio'}
+                    {activeTab === 'hardware' && 'Hardware Terminal Locking Matrix'}
+                    {activeTab === 'enforcer' && 'Web DRM Middleware & Integration'}
+                    {activeTab === 'arms' && 'ARMS Rental Licenses Suite'}
+                    {activeTab === 'settings' && 'Settings (License Policies & DRM Rules)'}
+                    {activeTab === 'supabase' && 'Supabase Settings (Cluster & Account Health)'}
+                    {activeTab === 'users' && 'User Premium (Superadmins & BCrypt Security)'}
+                  </h1>
+                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                    v2.6
+                  </span>
+                </div>
+                <div className="text-[10px] font-semibold text-slate-400 flex items-center gap-1.5 whitespace-nowrap">
+                  <span className="font-mono text-slate-600">gcebwzpcyeltzhyqefxo</span>
+                  <span>•</span>
+                  <span className="font-mono text-slate-700 font-bold">{licenses.length} Keys</span>
+                  <span>•</span>
+                  <span className="text-emerald-600 font-bold">● Active Matrix ({clusterLatency || 12}ms)</span>
+                </div>
+              </div>
             </div>
-            <p className="text-xs text-slate-500 font-medium mt-0.5">
-              Target Cluster: <strong className="font-mono text-slate-700">gcebwzpcyeltzhyqefxo</strong> &bull; Superadmin Authenticated
-            </p>
-          </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={loadAllLicenseData}
-              disabled={loading}
-              className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-2xs transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-            >
-              <RefreshCw size={14} className={loading ? 'animate-spin text-blue-600' : ''} />
-              <span>Refresh</span>
-            </button>
+            {/* Quick Action Toolbar - Clean single icons, matching AlphaRetail products */}
+            <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+              <button
+                onClick={loadAllLicenseData}
+                disabled={loading}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-bold transition-all shadow-2xs hover:border-slate-300 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Refresh Telemetry Data"
+              >
+                <RefreshCw size={11} className={loading ? 'animate-spin text-blue-600' : 'text-slate-500'} />
+                <span>Refresh</span>
+              </button>
 
-            <button
-              onClick={() => setActiveTab('generator')}
-              className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black shadow-xs transition cursor-pointer flex items-center gap-1.5"
-            >
-              <Plus size={14} />
-              <span>Issue Key</span>
-            </button>
+              <button
+                onClick={() => setShowAnalyticsStudio((prev) => !prev)}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer ${
+                  showAnalyticsStudio
+                    ? 'bg-blue-50 border-blue-300 text-blue-700'
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+                title="Toggle Realtime Linear Trend & Vector Charts"
+              >
+                <BarChart2 size={11} className="text-blue-600" />
+                <span>{showAnalyticsStudio ? 'Charts On' : 'Charts'}</span>
+              </button>
+
+              <button
+                onClick={exportLicensesCSV}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-bold transition-all shadow-2xs hover:border-slate-300 flex items-center gap-1.5 cursor-pointer"
+                title="Export Licenses to CSV"
+              >
+                <Download size={11} className="text-emerald-600" />
+                <span>Export</span>
+              </button>
+
+              <button
+                onClick={() => setShowRawKeys((prev) => !prev)}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer ${
+                  showRawKeys
+                    ? 'bg-amber-50 border-amber-300 text-amber-700'
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+                title="Show / Mask Raw License Keys"
+              >
+                {showRawKeys ? <Eye size={11} className="text-amber-600" /> : <EyeOff size={11} className="text-slate-400" />}
+                <span>{showRawKeys ? 'Keys Shown' : 'Keys Masked'}</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('generator')}
+                className="px-3 py-1 rounded-lg bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 text-white text-[11px] font-black transition-all shadow-xs hover:shadow-blue-500/25 active:scale-[0.98] flex items-center gap-1.5 shrink-0 cursor-pointer"
+                title="Provision New License Key"
+              >
+                <Plus size={12} className="stroke-[3]" />
+                <span>Issue Key</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* 8-Metric HUD */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-4">
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-2.5 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Keys</span>
-            <div className="text-base font-black text-slate-900">{metrics.total}</div>
+        {/* ━━━ EXECUTIVE METRIC HUD CARDS (MATCHING ALPHARETAIL COMPACT CARDS) ━━━ */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-3">
+          {/* 1. Total Keys */}
+          <div className="bg-white rounded-2xl p-2.5 sm:p-3 border border-slate-200/90 shadow-2xs hover:shadow-xs transition-shadow">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Keys</span>
+              <div className="w-5 h-5 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
+                <Key size={11} />
+              </div>
+            </div>
+            <div className="text-lg font-black text-slate-900 font-mono">{metrics.total.toLocaleString()}</div>
+            <div className="text-[10px] text-slate-400 font-medium">All registered keys</div>
           </div>
-          <div className="bg-white border border-emerald-200/90 rounded-2xl p-2.5 shadow-xs flex flex-col justify-between bg-emerald-50/20">
-            <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Active DRM</span>
-            <div className="text-base font-black text-emerald-700">{metrics.active}</div>
+
+          {/* 2. Active DRM */}
+          <div className="bg-white rounded-2xl p-2.5 sm:p-3 border border-emerald-200/90 bg-gradient-to-br from-emerald-50/30 via-white to-white shadow-2xs">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Active DRM</span>
+              <div className="w-5 h-5 rounded-lg bg-emerald-100 flex items-center justify-center text-emerald-700">
+                <Check size={11} />
+              </div>
+            </div>
+            <div className="text-lg font-black text-emerald-700 font-mono">{metrics.active.toLocaleString()}</div>
+            <div className="text-[10px] text-emerald-600 font-medium">Enforcing in POS</div>
           </div>
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-2.5 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Bound Machines</span>
-            <div className="text-base font-black text-slate-900">{metrics.bound}</div>
+
+          {/* 3. Bound Hardware */}
+          <div className="bg-white rounded-2xl p-2.5 sm:p-3 border border-purple-200/90 bg-gradient-to-br from-purple-50/30 via-white to-white shadow-2xs">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700">Bound Devices</span>
+              <div className="w-5 h-5 rounded-lg bg-purple-100 flex items-center justify-center text-purple-700">
+                <Laptop size={11} />
+              </div>
+            </div>
+            <div className="text-lg font-black text-purple-700 font-mono">{metrics.bound.toLocaleString()}</div>
+            <div className="text-[10px] text-purple-600 font-medium">Motherboard locked</div>
           </div>
-          <div className="bg-white border border-amber-200/90 rounded-2xl p-2.5 shadow-xs flex flex-col justify-between bg-amber-50/20">
-            <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Expiring (&le;7d)</span>
-            <div className="text-base font-black text-amber-800">{metrics.expiringSoon}</div>
+
+          {/* 4. Expiring Soon */}
+          <div className={`bg-white rounded-2xl p-2.5 sm:p-3 border shadow-2xs ${
+            metrics.expiringSoon > 0
+              ? 'border-amber-200/90 bg-gradient-to-br from-amber-50/40 via-white to-white'
+              : 'border-slate-200/90 bg-white'
+          }`}>
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${metrics.expiringSoon > 0 ? 'text-amber-700' : 'text-slate-500'}`}>
+                Expiring (&le;7d)
+              </span>
+              <div className={`w-5 h-5 rounded-lg flex items-center justify-center ${metrics.expiringSoon > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
+                <AlertTriangle size={11} />
+              </div>
+            </div>
+            <div className={`text-lg font-black font-mono ${metrics.expiringSoon > 0 ? 'text-amber-800' : 'text-slate-900'}`}>
+              {metrics.expiringSoon}
+            </div>
+            <div className={`text-[10px] font-medium ${metrics.expiringSoon > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+              {metrics.expiringSoon > 0 ? 'Renewal pending' : 'All optimal'}
+            </div>
           </div>
-          <div className="bg-white border border-rose-200/90 rounded-2xl p-2.5 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-rose-700 uppercase tracking-wider">Expired</span>
-            <div className="text-base font-black text-rose-800">{metrics.expired}</div>
+
+          {/* 5. Expired Keys */}
+          <div className={`bg-white rounded-2xl p-2.5 sm:p-3 border shadow-2xs ${
+            metrics.expired > 0
+              ? 'border-rose-200/90 bg-gradient-to-br from-rose-50/30 via-white to-white'
+              : 'border-slate-200/90 bg-white'
+          }`}>
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${metrics.expired > 0 ? 'text-rose-700' : 'text-slate-500'}`}>
+                Expired Keys
+              </span>
+              <div className={`w-5 h-5 rounded-lg flex items-center justify-center ${metrics.expired > 0 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'}`}>
+                <XCircle size={11} />
+              </div>
+            </div>
+            <div className={`text-lg font-black font-mono ${metrics.expired > 0 ? 'text-rose-700' : 'text-slate-900'}`}>
+              {metrics.expired}
+            </div>
+            <div className={`text-[10px] font-medium ${metrics.expired > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
+              {metrics.expired > 0 ? 'Access barred' : 'Zero expired'}
+            </div>
           </div>
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-2.5 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Revoked</span>
-            <div className="text-base font-black text-slate-900">{metrics.revoked}</div>
+
+          {/* 6. Revoked */}
+          <div className="bg-white rounded-2xl p-2.5 sm:p-3 border border-slate-200/90 shadow-2xs">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Revoked</span>
+              <div className="w-5 h-5 rounded-lg bg-slate-100 flex items-center justify-center text-slate-700">
+                <ShieldAlert size={11} />
+              </div>
+            </div>
+            <div className="text-lg font-black text-slate-900 font-mono">{metrics.revoked}</div>
+            <div className="text-[10px] text-slate-400 font-medium">Blacklisted keys</div>
           </div>
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-2.5 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Multi-Terminal</span>
-            <div className="text-base font-black text-slate-900">{metrics.multiDevice}</div>
+
+          {/* 7. Multi-Seat */}
+          <div className="bg-white rounded-2xl p-2.5 sm:p-3 border border-sky-200/90 bg-gradient-to-br from-sky-50/30 via-white to-white shadow-2xs">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700">Multi-Device</span>
+              <div className="w-5 h-5 rounded-lg bg-sky-100 flex items-center justify-center text-sky-700">
+                <Layers size={11} />
+              </div>
+            </div>
+            <div className="text-lg font-black text-sky-700 font-mono">{metrics.multiDevice}</div>
+            <div className="text-[10px] text-sky-600 font-medium">Floating seats</div>
           </div>
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-2.5 shadow-xs flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">DB Latency</span>
-            <div className="text-base font-black text-slate-900">{clusterLatency || 12} ms</div>
+
+          {/* 8. Cluster Latency */}
+          <div className="bg-white rounded-2xl p-2.5 sm:p-3 border border-teal-200/90 bg-gradient-to-br from-teal-50/30 via-white to-white shadow-2xs">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-teal-700">DB Latency</span>
+              <div className="w-5 h-5 rounded-lg bg-teal-100 flex items-center justify-center text-teal-700">
+                <Activity size={11} />
+              </div>
+            </div>
+            <div className="text-lg font-black text-teal-700 font-mono">{clusterLatency || 12} ms</div>
+            <div className="text-[10px] text-teal-600 font-medium">Supabase Realtime</div>
           </div>
         </div>
+
+        {/* ━━━ INTERACTIVE ANALYTICS & VECTOR TREND STUDIO (MATCHING ALPHARETAIL) ━━━ */}
+        {showAnalyticsStudio && vectorChartData && (
+          <div className="bg-white/95 backdrop-blur-md rounded-2xl p-3 sm:p-3.5 border border-slate-200/90 shadow-sm transition-all space-y-3 mb-3">
+            {/* Studio Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2.5 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-indigo-600 to-blue-500 text-white flex items-center justify-center shadow-xs">
+                  <BarChart2 size={14} />
+                </div>
+                <div>
+                  <h2 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>Realtime Software License &amp; Vector Telemetry Studio</span>
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono">
+                      Live Vector Engine
+                    </span>
+                  </h2>
+                  <p className="text-[10px] text-slate-500 font-medium">
+                    Side-by-side longevity curves, tier distribution spreads &amp; machine binding telemetry
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono text-slate-400">
+                  Hover points to inspect live telemetry
+                </span>
+              </div>
+            </div>
+
+            {/* Side-by-Side Vector Charts */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              {/* Left Chart: Longevity Curve */}
+              <div className="bg-slate-50/70 p-3 rounded-xl border border-slate-200/80 relative">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <TrendingUp size={13} className="text-blue-600" />
+                    <span>License Longevity &amp; Expiry Horizon Vector</span>
+                  </span>
+                  <span className="text-[10px] font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                    Max: {vectorChartData.maxDays}d
+                  </span>
+                </div>
+
+                <div className="relative">
+                  <svg
+                    viewBox={`0 0 ${vectorChartData.svgW} ${vectorChartData.svgH}`}
+                    className="w-full h-36 overflow-visible"
+                  >
+                    <defs>
+                      <linearGradient id="longevityGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#3B82F6" stopOpacity="0.4" />
+                        <stop offset="100%" stopColor="#3B82F6" stopOpacity="0.02" />
+                      </linearGradient>
+                    </defs>
+
+                    {/* Area fill */}
+                    <path
+                      d={getAreaPath(vectorChartData.longevityPts, vectorChartData.padT + vectorChartData.plotH)}
+                      fill="url(#longevityGrad)"
+                    />
+
+                    {/* Bezier line */}
+                    <path
+                      d={vectorChartData.longevityPath}
+                      fill="none"
+                      stroke="#2563EB"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                    />
+
+                    {/* Data Points */}
+                    {vectorChartData.longevityPts.map((pt, i) => {
+                      const isHovered = activeChartHover === i;
+                      return (
+                        <g key={i}>
+                          <circle
+                            cx={pt.x}
+                            cy={pt.y}
+                            r={isHovered ? 5 : 3.5}
+                            fill={isHovered ? '#2563EB' : '#FFFFFF'}
+                            stroke="#2563EB"
+                            strokeWidth="2"
+                            className="cursor-pointer transition-all"
+                            onMouseEnter={() => setActiveChartHover(i)}
+                            onMouseLeave={() => setActiveChartHover(null)}
+                          />
+                        </g>
+                      );
+                    })}
+                  </svg>
+
+                  {/* Dynamic Floating Tooltip */}
+                  {activeChartHover !== null && vectorChartData.pointsData[activeChartHover] && (
+                    <div className="absolute top-2 right-2 bg-slate-900 text-white text-[10px] p-2 rounded-xl shadow-lg font-mono border border-slate-700 pointer-events-none">
+                      <div className="font-bold text-blue-300">{vectorChartData.pointsData[activeChartHover].client}</div>
+                      <div>Key: {vectorChartData.pointsData[activeChartHover].key.slice(0, 14)}...</div>
+                      <div className="text-emerald-400 font-bold">{vectorChartData.pointsData[activeChartHover].days} days remaining</div>
+                      <div className="text-slate-400">{vectorChartData.pointsData[activeChartHover].bound ? '🔒 Bound HWID' : '🔓 Unbound Floating'}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Chart: Tier Valuation Spread */}
+              <div className="bg-slate-50/70 p-3 rounded-xl border border-slate-200/80">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <PieChart size={13} className="text-indigo-600" />
+                    <span>Tier Breakdown &amp; Commercial Distribution</span>
+                  </span>
+                  <span className="text-[10px] font-mono text-slate-500">
+                    {Object.keys(vectorChartData.tierMap).length} Active Tiers
+                  </span>
+                </div>
+
+                <div className="space-y-2 pt-1">
+                  {Object.entries(vectorChartData.tierMap).map(([tier, count]) => {
+                    const pct = Math.round((count / Math.max(licenses.length, 1)) * 100);
+                    return (
+                      <div key={tier} className="space-y-1">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-bold text-slate-700">{tier}</span>
+                          <span className="font-mono text-slate-500 font-bold">
+                            {count} keys ({pct}%)
+                          </span>
+                        </div>
+                        <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-blue-600 to-indigo-600 rounded-full transition-all duration-500"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ══════════════════════════════════════════════════════════════════
-            TAB 1: LICENSE MASTER REGISTRY (DATAGRID)
+            TAB 1: LICENSE MASTER REGISTRY (DATAGRID & CARD GRID)
             ══════════════════════════════════════════════════════════════════ */}
         {activeTab === 'registry' && (
           <div className="space-y-3">
-            <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-xs flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[280px]">
-                <div className="relative flex-1 min-w-[200px]">
+            {/* Filter Bar with Status Count Pills & View Mode */}
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-xs space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
+                {/* Search Input */}
+                <div className="relative flex-1 min-w-[220px]">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
@@ -1395,26 +1893,19 @@ export default function LicenseManagerStudioPage() {
                       setSearchTerm(e.target.value);
                       setCurrentPage(1);
                     }}
-                    className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full pl-9 pr-8 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-slate-400"
                   />
+                  {searchTerm && (
+                    <button
+                      onClick={() => setSearchTerm('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
                 </div>
 
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
-                    setStatusFilter(e.target.value as any);
-                    setCurrentPage(1);
-                  }}
-                  className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 cursor-pointer"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="ACTIVE">Active &amp; Licensed</option>
-                  <option value="EXPIRED">Expired</option>
-                  <option value="REVOKED">Revoked / Blacklisted</option>
-                  <option value="BOUND">Hardware Bound</option>
-                  <option value="UNBOUND">Unbound / Floating</option>
-                </select>
-
+                {/* Tier Selector */}
                 <select
                   value={tierFilter}
                   onChange={(e) => {
@@ -1423,201 +1914,428 @@ export default function LicenseManagerStudioPage() {
                   }}
                   className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 cursor-pointer"
                 >
-                  <option value="ALL">All Tiers</option>
+                  <option value="ALL">All Tiers ({licenses.length})</option>
                   <option value="ALPHA-RETAIL-PRO">Retail Pro</option>
                   <option value="ALPHA-ENTERPRISE">Enterprise</option>
                   <option value="TRIAL-30">Trial 30-Day</option>
                   <option value="F03D">F03D Energy</option>
                   <option value="F02D">F02D Energy</option>
                 </select>
+
+                {/* View Mode Switcher: Table / Grid */}
+                <div className="flex items-center p-0.5 bg-slate-100 rounded-xl border border-slate-200 shrink-0">
+                  <button
+                    onClick={() => setViewMode('table')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                      viewMode === 'table' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                    title="Table View"
+                  >
+                    <List size={13} />
+                    <span>Table</span>
+                  </button>
+                  <button
+                    onClick={() => setViewMode('grid')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                      viewMode === 'grid' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                    title="Grid Card View"
+                  >
+                    <Grid size={13} />
+                    <span>Cards</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="text-xs font-bold text-slate-500">
-                Showing <strong className="text-slate-900 font-mono">{filteredLicenses.length}</strong> matching licenses
-              </div>
-            </div>
-
-            {/* Strict Non-Dark Visible Datagrid */}
-            <div className="bg-white border border-slate-200/90 rounded-2xl shadow-xs overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead className="bg-slate-100 border-b-2 border-slate-300">
-                    <tr className="bg-slate-100 border-b border-slate-300">
-                      <th className="py-3 px-3 font-black uppercase tracking-wider text-[11px] w-12 text-center text-slate-900 bg-slate-100 border-r border-slate-200">#</th>
-                      <th className="py-3 px-3 font-black uppercase tracking-wider text-[11px] text-slate-900 bg-slate-100 border-r border-slate-200">License Key</th>
-                      <th className="py-3 px-3 font-black uppercase tracking-wider text-[11px] text-slate-900 bg-slate-100 border-r border-slate-200">Client / Contact</th>
-                      <th className="py-3 px-3 font-black uppercase tracking-wider text-[11px] text-slate-900 bg-slate-100 border-r border-slate-200">Tier / Type</th>
-                      <th className="py-3 px-3 font-black uppercase tracking-wider text-[11px] text-slate-900 bg-slate-100 border-r border-slate-200">Machine Binding (Hardware ID)</th>
-                      <th className="py-3 px-3 font-black uppercase tracking-wider text-[11px] text-center text-slate-900 bg-slate-100 border-r border-slate-200">Devices</th>
-                      <th className="py-3 px-3 font-black uppercase tracking-wider text-[11px] text-slate-900 bg-slate-100 border-r border-slate-200">Expiry &amp; Days Left</th>
-                      <th className="py-3 px-3 font-black uppercase tracking-wider text-[11px] text-center text-slate-900 bg-slate-100 border-r border-slate-200">DRM Status</th>
-                      <th className="py-3 px-3 font-black uppercase tracking-wider text-[11px] text-center text-slate-900 bg-slate-100">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {paginatedLicenses.length === 0 ? (
-                      <tr>
-                        <td colSpan={9} className="py-12 text-center text-slate-400">
-                          <Key size={32} className="mx-auto text-slate-300 mb-2" />
-                          <p className="font-bold text-slate-600">No licenses match your filters</p>
-                        </td>
-                      </tr>
-                    ) : (
-                      paginatedLicenses.map((lic, idx) => {
-                        const rowNum = (currentPage - 1) * rowsPerPage + idx + 1;
-                        const daysLeft = getDaysRemaining(lic.expiration_date);
-                        const isRevoked = lic.is_revoked === true;
-                        const isExpired = !isRevoked && daysLeft <= 0;
-                        const isExpiringSoon = !isRevoked && daysLeft > 0 && daysLeft <= 7;
-
-                        return (
-                          <tr key={lic.license_id || idx} className="hover:bg-slate-50 transition">
-                            <td className="py-2.5 px-3 text-center text-slate-400 font-mono text-[11px]">{rowNum}</td>
-                            <td className="py-2.5 px-3">
-                              <div className="flex items-center gap-2">
-                                <code className="bg-slate-100 border border-slate-300 px-2 py-0.5 rounded-md font-mono font-bold text-slate-900 text-[11px]">
-                                  {showRawKeys ? lic.license_key : `${lic.license_key.slice(0, 10)}••••••••${lic.license_key.slice(-4)}`}
-                                </code>
-                                <button
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(lic.license_key);
-                                    toast.success(`Copied! 📋`);
-                                  }}
-                                  className="text-slate-400 hover:text-slate-800 p-1"
-                                  title="Copy Key"
-                                >
-                                  <Copy size={12} />
-                                </button>
-                              </div>
-                            </td>
-                            <td className="py-2.5 px-3">
-                              <div className="font-bold text-slate-900">{lic.client_name}</div>
-                              <div className="text-[10px] text-slate-500 font-medium">{lic.client_phone || '—'}</div>
-                            </td>
-                            <td className="py-2.5 px-3">
-                              <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-blue-50 text-blue-800 border border-blue-200">
-                                {lic.license_type || 'Standard'}
-                              </span>
-                            </td>
-                            <td className="py-2.5 px-3">
-                              {lic.activation_device_id ? (
-                                <div className="flex items-center gap-1.5">
-                                  <Laptop size={13} className="text-indigo-600 shrink-0" />
-                                  <span className="font-mono text-[10px] text-slate-800 font-bold">
-                                    {lic.activation_device_id.slice(0, 12)}...
-                                  </span>
-                                  <button
-                                    onClick={() => handleResetMachineBinding(lic)}
-                                    className="ml-1 text-[10px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded cursor-pointer"
-                                  >
-                                    Unbind
-                                  </button>
-                                </div>
-                              ) : (
-                                <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                                  🔓 Ready to Bind
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-700">{lic.max_devices || 1}</td>
-                            <td className="py-2.5 px-3">
-                              <div className="font-semibold text-slate-800">{formatDate(lic.expiration_date)}</div>
-                              <div className="mt-0.5">
-                                {isRevoked ? (
-                                  <span className="text-[9.5px] font-bold text-slate-400">Revoked</span>
-                                ) : isExpired ? (
-                                  <span className="text-[9.5px] font-black text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">Expired</span>
-                                ) : isExpiringSoon ? (
-                                  <span className="text-[9.5px] font-black text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">{daysLeft}d left ⚠️</span>
-                                ) : (
-                                  <span className="text-[9.5px] font-bold text-emerald-700">{daysLeft}d left</span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="py-2.5 px-3 text-center">
-                              {isRevoked ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-300">
-                                  Revoked
-                                </span>
-                              ) : isExpired ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
-                                  Expired
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                                  Active
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-center">
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  onClick={() => handleExtendDuration(lic, 30)}
-                                  className="px-2 py-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold rounded cursor-pointer"
-                                >
-                                  +30d
-                                </button>
-                                <button
-                                  onClick={() => handleToggleRevoke(lic)}
-                                  className={`px-2 py-1 rounded text-[10px] font-bold cursor-pointer border ${
-                                    isRevoked
-                                      ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
-                                      : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200'
-                                  }`}
-                                >
-                                  {isRevoked ? 'Restore' : 'Revoke'}
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Pagination Dock */}
-              <div className="p-3 bg-slate-50/80 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-500 font-medium">Rows:</span>
-                  <select
-                    value={rowsPerPage}
-                    onChange={(e) => {
-                      setRowsPerPage(Number(e.target.value));
+              {/* Status Count Pills Horizon */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
+                {[
+                  { id: 'ALL', label: 'ALL', count: licenses.length },
+                  { id: 'ACTIVE', label: 'ACTIVE', count: metrics.active },
+                  { id: 'BOUND', label: 'BOUND', count: metrics.bound },
+                  { id: 'UNBOUND', label: 'UNBOUND', count: Math.max(0, licenses.length - metrics.bound) },
+                  { id: 'EXPIRING', label: 'EXPIRING', count: metrics.expiringSoon },
+                  { id: 'EXPIRED', label: 'EXPIRED', count: metrics.expired },
+                  { id: 'REVOKED', label: 'REVOKED', count: metrics.revoked },
+                ].map((st) => (
+                  <button
+                    key={st.id}
+                    onClick={() => {
+                      setStatusFilter(st.id as any);
                       setCurrentPage(1);
                     }}
-                    className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-700 cursor-pointer"
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-black transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
+                      statusFilter === st.id
+                        ? 'bg-blue-600 text-white shadow-2xs'
+                        : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+                    }`}
                   >
-                    <option value={10}>10</option>
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
-                  </select>
-                  <span className="text-slate-500 ml-2">
-                    Showing <strong>{filteredLicenses.length === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}</strong> to{' '}
-                    <strong>{Math.min(currentPage * rowsPerPage, filteredLicenses.length)}</strong> of <strong>{filteredLicenses.length}</strong>
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
-                    <ChevronsLeft size={14} />
+                    <span>{st.label}</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[9px] ${
+                        statusFilter === st.id ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {st.count}
+                    </span>
                   </button>
-                  <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
-                    <ChevronLeft size={14} />
-                  </button>
-                  <span className="px-3 py-1 font-bold text-slate-800 bg-white border border-slate-200 rounded-lg">
-                    {currentPage} / {totalPages}
-                  </span>
-                  <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
-                    <ChevronRight size={14} />
-                  </button>
-                  <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
-                    <ChevronsRight size={14} />
-                  </button>
-                </div>
+                ))}
               </div>
             </div>
+
+            {/* Conditional View: Datagrid Table or Grid Cards */}
+            {viewMode === 'table' ? (
+              /* ━━━ MASTER DATAGRID TABLE VIEW ━━━ */
+              <div className="bg-white border border-slate-200/90 rounded-2xl shadow-xs overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead className="bg-slate-100 border-b-2 border-slate-300">
+                      <tr className="bg-slate-100 border-b border-slate-300">
+                        <th className="py-2.5 px-3 font-black uppercase tracking-wider text-[10px] w-12 text-center text-slate-900 bg-slate-100 border-r border-slate-200">#</th>
+                        <th className="py-2.5 px-3 font-black uppercase tracking-wider text-[10px] text-slate-900 bg-slate-100 border-r border-slate-200">License Key</th>
+                        <th className="py-2.5 px-3 font-black uppercase tracking-wider text-[10px] text-slate-900 bg-slate-100 border-r border-slate-200">Client / Contact</th>
+                        <th className="py-2.5 px-3 font-black uppercase tracking-wider text-[10px] text-slate-900 bg-slate-100 border-r border-slate-200">Tier / Type</th>
+                        <th className="py-2.5 px-3 font-black uppercase tracking-wider text-[10px] text-slate-900 bg-slate-100 border-r border-slate-200">Machine Binding (HWID)</th>
+                        <th className="py-2.5 px-3 font-black uppercase tracking-wider text-[10px] text-center text-slate-900 bg-slate-100 border-r border-slate-200">Seats</th>
+                        <th className="py-2.5 px-3 font-black uppercase tracking-wider text-[10px] text-slate-900 bg-slate-100 border-r border-slate-200">Expiry &amp; Days</th>
+                        <th className="py-2.5 px-3 font-black uppercase tracking-wider text-[10px] text-center text-slate-900 bg-slate-100 border-r border-slate-200">DRM Status</th>
+                        <th className="py-2.5 px-3 font-black uppercase tracking-wider text-[10px] text-center text-slate-900 bg-slate-100">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {paginatedLicenses.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="py-12 text-center text-slate-400">
+                            <Key size={32} className="mx-auto text-slate-300 mb-2" />
+                            <p className="font-bold text-slate-600">No licenses match your filters</p>
+                          </td>
+                        </tr>
+                      ) : (
+                        paginatedLicenses.map((lic, idx) => {
+                          const rowNum = (currentPage - 1) * rowsPerPage + idx + 1;
+                          const daysLeft = getDaysRemaining(lic.expiration_date);
+                          const isRevoked = lic.is_revoked === true;
+                          const isExpired = !isRevoked && daysLeft <= 0;
+                          const isExpiringSoon = !isRevoked && daysLeft > 0 && daysLeft <= 7;
+
+                          return (
+                            <tr key={lic.license_id || idx} className="hover:bg-slate-50 transition">
+                              <td className="py-2 px-3 text-center text-slate-400 font-mono text-[11px]">{rowNum}</td>
+                              <td className="py-2 px-3">
+                                <div className="flex items-center gap-2">
+                                  <code className="bg-slate-100 border border-slate-300 px-2 py-0.5 rounded-md font-mono font-bold text-slate-900 text-[11px]">
+                                    {showRawKeys ? lic.license_key : `${lic.license_key.slice(0, 10)}••••••••${lic.license_key.slice(-4)}`}
+                                  </code>
+                                  <button
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(lic.license_key);
+                                      toast.success(`Copied! 📋`);
+                                    }}
+                                    className="text-slate-400 hover:text-slate-800 p-1"
+                                    title="Copy Key"
+                                  >
+                                    <Copy size={12} />
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="py-2 px-3">
+                                <div className="font-bold text-slate-900">{lic.client_name}</div>
+                                <div className="text-[10px] text-slate-500 font-medium">{lic.client_phone || '—'}</div>
+                              </td>
+                              <td className="py-2 px-3">
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-blue-50 text-blue-800 border border-blue-200">
+                                  {lic.license_type || 'Standard'}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3">
+                                {lic.activation_device_id ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <Laptop size={13} className="text-indigo-600 shrink-0" />
+                                    <span className="font-mono text-[10px] text-slate-800 font-bold">
+                                      {lic.activation_device_id.slice(0, 12)}...
+                                    </span>
+                                    <button
+                                      onClick={() => setUnbindModalLicense(lic)}
+                                      className="ml-1 text-[10px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded cursor-pointer"
+                                      title="Unbind Machine ID"
+                                    >
+                                      Unbind
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                                    🔓 Ready to Bind
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 text-center font-mono font-bold text-slate-700">{lic.max_devices || 1}</td>
+                              <td className="py-2 px-3">
+                                <div className="font-semibold text-slate-800">{formatDate(lic.expiration_date)}</div>
+                                <div className="mt-0.5">
+                                  {isRevoked ? (
+                                    <span className="text-[9.5px] font-bold text-slate-400">Revoked</span>
+                                  ) : isExpired ? (
+                                    <span className="text-[9.5px] font-black text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">Expired</span>
+                                  ) : isExpiringSoon ? (
+                                    <span className="text-[9.5px] font-black text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">{daysLeft}d left ⚠️</span>
+                                  ) : (
+                                    <span className="text-[9.5px] font-bold text-emerald-700">{daysLeft}d left</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-2 px-3 text-center">
+                                {isRevoked ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-300">
+                                    Revoked
+                                  </span>
+                                ) : isExpired ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
+                                    Expired
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                    Active
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    onClick={() => setExtendModalLicense(lic)}
+                                    className="px-2 py-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-bold rounded cursor-pointer"
+                                    title="Extend License Duration"
+                                  >
+                                    +Extend
+                                  </button>
+                                  <button
+                                    onClick={() => setRevokeModalLicense(lic)}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold cursor-pointer border ${
+                                      isRevoked
+                                        ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                                        : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200'
+                                    }`}
+                                    title={isRevoked ? 'Restore License' : 'Revoke License'}
+                                  >
+                                    {isRevoked ? 'Restore' : 'Revoke'}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Dock */}
+                <div className="p-3 bg-slate-50/80 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500 font-medium">Rows:</span>
+                    <select
+                      value={rowsPerPage}
+                      onChange={(e) => {
+                        setRowsPerPage(Number(e.target.value));
+                        setCurrentPage(1);
+                      }}
+                      className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-700 cursor-pointer"
+                    >
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                    </select>
+                    <span className="text-slate-500 ml-2">
+                      Showing <strong>{filteredLicenses.length === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}</strong> to{' '}
+                      <strong>{Math.min(currentPage * rowsPerPage, filteredLicenses.length)}</strong> of <strong>{filteredLicenses.length}</strong>
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
+                      <ChevronsLeft size={14} />
+                    </button>
+                    <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
+                      <ChevronLeft size={14} />
+                    </button>
+                    <span className="px-3 py-1 font-bold text-slate-800 bg-white border border-slate-200 rounded-lg">
+                      {currentPage} / {totalPages}
+                    </span>
+                    <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
+                      <ChevronRight size={14} />
+                    </button>
+                    <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
+                      <ChevronsRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* ━━━ SUPER ULTRA GRID CARDS VIEW ━━━ */
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  {paginatedLicenses.length === 0 ? (
+                    <div className="col-span-full py-12 text-center text-slate-400 bg-white rounded-2xl border border-slate-200">
+                      <Key size={32} className="mx-auto text-slate-300 mb-2" />
+                      <p className="font-bold text-slate-600">No licenses match your filters</p>
+                    </div>
+                  ) : (
+                    paginatedLicenses.map((lic) => {
+                      const daysLeft = getDaysRemaining(lic.expiration_date);
+                      const isRevoked = lic.is_revoked === true;
+                      const isExpired = !isRevoked && daysLeft <= 0;
+                      const isExpiringSoon = !isRevoked && daysLeft > 0 && daysLeft <= 7;
+
+                      return (
+                        <div
+                          key={lic.license_id}
+                          className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs hover:shadow-md transition-all hover:border-blue-300 flex flex-col justify-between relative group"
+                        >
+                          {/* Top Accent Strip */}
+                          <div className="h-1 w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500 rounded-full mb-3" />
+
+                          <div className="space-y-2.5">
+                            {/* Card Header: Client & Status Badge */}
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <h3 className="font-black text-slate-900 text-sm leading-tight">{lic.client_name}</h3>
+                                <div className="text-[10px] text-slate-500 font-medium">{lic.client_phone || 'No phone recorded'}</div>
+                              </div>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-black shrink-0 ${
+                                  isRevoked
+                                    ? 'bg-slate-100 text-slate-700 border border-slate-300'
+                                    : isExpired
+                                    ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                    : isExpiringSoon
+                                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                }`}
+                              >
+                                {isRevoked ? 'Revoked' : isExpired ? 'Expired' : isExpiringSoon ? `${daysLeft}d Left` : 'Active'}
+                              </span>
+                            </div>
+
+                            {/* License Key Chip */}
+                            <div className="p-2 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
+                              <code className="font-mono text-xs font-bold text-slate-900 truncate">
+                                {showRawKeys ? lic.license_key : `${lic.license_key.slice(0, 12)}••••${lic.license_key.slice(-4)}`}
+                              </code>
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(lic.license_key);
+                                  toast.success('Key copied! 📋');
+                                }}
+                                className="text-slate-400 hover:text-slate-800 p-1 shrink-0"
+                                title="Copy Key"
+                              >
+                                <Copy size={13} />
+                              </button>
+                            </div>
+
+                            {/* Metadata Pills */}
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Tier</span>
+                                <span className="font-bold text-slate-800 truncate block text-[11px]">{lic.license_type}</span>
+                              </div>
+                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Seats</span>
+                                <span className="font-bold text-slate-800 block text-[11px]">{lic.max_devices || 1} Device(s)</span>
+                              </div>
+                            </div>
+
+                            {/* Machine Binding Info */}
+                            <div className="p-2 rounded-lg bg-blue-50/40 border border-blue-100 flex items-center justify-between text-xs">
+                              <div className="flex items-center gap-1.5 truncate">
+                                <Laptop size={13} className="text-blue-600 shrink-0" />
+                                <span className="text-[10px] font-mono text-slate-700 truncate">
+                                  {lic.activation_device_id ? `HWID: ${lic.activation_device_id.slice(0, 14)}...` : 'Ready to Bind'}
+                                </span>
+                              </div>
+                              {lic.activation_device_id && (
+                                <button
+                                  onClick={() => setUnbindModalLicense(lic)}
+                                  className="text-[9px] font-bold text-amber-700 hover:underline shrink-0"
+                                >
+                                  Unbind
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Action Buttons Footer */}
+                          <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              Exp: {formatDate(lic.expiration_date)}
+                            </span>
+
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => setExtendModalLicense(lic)}
+                                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition cursor-pointer"
+                              >
+                                +Extend
+                              </button>
+                              <button
+                                onClick={() => setRevokeModalLicense(lic)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                                  isRevoked
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                                    : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+                                }`}
+                              >
+                                {isRevoked ? 'Restore' : 'Revoke'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Pagination Dock for Grid View */}
+                <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500 font-medium">Rows:</span>
+                    <select
+                      value={rowsPerPage}
+                      onChange={(e) => {
+                        setRowsPerPage(Number(e.target.value));
+                        setCurrentPage(1);
+                      }}
+                      className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-700 cursor-pointer"
+                    >
+                      <option value={9}>9</option>
+                      <option value={18}>18</option>
+                      <option value={36}>36</option>
+                    </select>
+                    <span className="text-slate-500 ml-2">
+                      Showing <strong>{filteredLicenses.length === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}</strong> to{' '}
+                      <strong>{Math.min(currentPage * rowsPerPage, filteredLicenses.length)}</strong> of <strong>{filteredLicenses.length}</strong>
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
+                      <ChevronsLeft size={14} />
+                    </button>
+                    <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
+                      <ChevronLeft size={14} />
+                    </button>
+                    <span className="px-3 py-1 font-bold text-slate-800 bg-white border border-slate-200 rounded-lg">
+                      {currentPage} / {totalPages}
+                    </span>
+                    <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
+                      <ChevronRight size={14} />
+                    </button>
+                    <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages} className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer">
+                      <ChevronsRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1814,7 +2532,7 @@ export default function LicenseManagerStudioPage() {
                         </div>
 
                         <button
-                          onClick={() => handleResetMachineBinding(lic)}
+                          onClick={() => setUnbindModalLicense(lic)}
                           className="px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold transition cursor-pointer"
                         >
                           🔓 Reset Hardware Lock
@@ -2371,6 +3089,282 @@ export default function LicenseManagerStudioPage() {
           </div>
         )}
       </main>
+
+      {/* ━━━ SUPER ULTRA HARDWARE UNBIND MODAL ━━━ */}
+      {unbindModalLicense && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-100 flex flex-col">
+            <div className="bg-gradient-to-r from-amber-600 to-orange-600 px-6 py-4 text-white flex items-center justify-between shadow-md">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center">
+                  <Laptop size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black">Unbind Hardware Terminal</h3>
+                  <p className="text-amber-100 text-xs font-mono">Motherboard Lock Release</p>
+                </div>
+              </div>
+              <button onClick={() => setUnbindModalLicense(null)} className="p-2 hover:bg-white/20 rounded-xl text-white">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 space-y-4">
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-amber-900/70 font-semibold">Client Name:</span>
+                  <strong className="text-amber-950 font-bold">{unbindModalLicense.client_name}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-amber-900/70 font-semibold">License Key:</span>
+                  <span className="font-mono text-amber-950 font-bold">{unbindModalLicense.license_key}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-amber-900/70 font-semibold">Bound Machine ID:</span>
+                  <span className="font-mono text-amber-900 font-bold break-all">
+                    {unbindModalLicense.activation_device_id || 'None'}
+                  </span>
+                </div>
+                {unbindModalLicense.device_manufacturer && (
+                  <div className="flex justify-between">
+                    <span className="text-amber-900/70 font-semibold">Terminal Model:</span>
+                    <span className="text-amber-950 font-medium">
+                      {unbindModalLicense.device_manufacturer} {unbindModalLicense.device_model || ''}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Releasing this motherboard lock will decouple the terminal hardware UUID from the license key. The customer will immediately be able to activate their software on a new POS machine.
+              </p>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setUnbindModalLicense(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const lic = unbindModalLicense;
+                    setUnbindModalLicense(null);
+                    await handleResetMachineBinding(lic, true);
+                  }}
+                  className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow-md transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <Unlock size={14} />
+                  <span>Confirm Machine Unbind</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ━━━ SUPER ULTRA REVOKE / RESTORE MODAL ━━━ */}
+      {revokeModalLicense && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-100 flex flex-col">
+            <div
+              className={`px-6 py-4 text-white flex items-center justify-between shadow-md ${
+                revokeModalLicense.is_revoked
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600'
+                  : 'bg-gradient-to-r from-rose-600 to-red-700'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center">
+                  {revokeModalLicense.is_revoked ? <ShieldCheck size={20} /> : <ShieldAlert size={20} />}
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black">
+                    {revokeModalLicense.is_revoked ? 'Restore License' : 'Revoke & Disable License'}
+                  </h3>
+                  <p className="text-white/80 text-xs font-mono">DRM Authorization Enforcement</p>
+                </div>
+              </div>
+              <button onClick={() => setRevokeModalLicense(null)} className="p-2 hover:bg-white/20 rounded-xl text-white">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 space-y-4">
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-semibold">Client Name:</span>
+                  <strong className="text-slate-900 font-bold">{revokeModalLicense.client_name}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-semibold">License Key:</span>
+                  <span className="font-mono text-slate-900 font-bold">{revokeModalLicense.license_key}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-semibold">Current State:</span>
+                  <span className={`font-bold ${revokeModalLicense.is_revoked ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    {revokeModalLicense.is_revoked ? 'Revoked / Blacklisted' : 'Active & Licensed'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-semibold">Expiration Date:</span>
+                  <span className="font-mono text-slate-800">{formatDate(revokeModalLicense.expiration_date)}</span>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                {revokeModalLicense.is_revoked
+                  ? 'Restoring this license will allow the client application to re-authenticate and pass zero-trust DRM checks.'
+                  : 'Revoking this license immediately invalidates all machine tokens. Any connected terminal running POS or ARMS will be blocked on its next validation ping.'}
+              </p>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRevokeModalLicense(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const lic = revokeModalLicense;
+                    setRevokeModalLicense(null);
+                    await handleToggleRevoke(lic, true);
+                  }}
+                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition cursor-pointer flex items-center gap-1.5 ${
+                    revokeModalLicense.is_revoked
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : 'bg-rose-600 hover:bg-rose-700'
+                  }`}
+                >
+                  {revokeModalLicense.is_revoked ? <Check size={14} /> : <ShieldAlert size={14} />}
+                  <span>{revokeModalLicense.is_revoked ? 'Restore License' : 'Revoke License'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ━━━ SUPER ULTRA DURATION EXTENSION MODAL ━━━ */}
+      {extendModalLicense && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-100 flex flex-col">
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4 text-white flex items-center justify-between shadow-md">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center">
+                  <Calendar size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black">Extend License Validity</h3>
+                  <p className="text-blue-100 text-xs font-mono">Duration &amp; Renewal Engine</p>
+                </div>
+              </div>
+              <button onClick={() => setExtendModalLicense(null)} className="p-2 hover:bg-white/20 rounded-xl text-white">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 sm:p-6 space-y-4">
+              <div className="p-3.5 bg-blue-50/60 border border-blue-200 rounded-2xl space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-blue-900/70 font-semibold">Client Name:</span>
+                  <strong className="text-blue-950 font-bold">{extendModalLicense.client_name}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-blue-900/70 font-semibold">License Key:</span>
+                  <span className="font-mono text-blue-950 font-bold">{extendModalLicense.license_key}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-blue-900/70 font-semibold">Current Expiry:</span>
+                  <span className="font-mono text-blue-900 font-bold">
+                    {formatDate(extendModalLicense.expiration_date)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 block">Select Extension Duration</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { label: '+30 Days', days: 30 },
+                    { label: '+90 Days', days: 90 },
+                    { label: '+180 Days', days: 180 },
+                    { label: '+365 Days', days: 365 },
+                  ].map((p) => (
+                    <button
+                      key={p.days}
+                      type="button"
+                      onClick={() => setExtendDaysSelection(p.days)}
+                      className={`py-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                        extendDaysSelection === p.days
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Days Input */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-500 block mb-1">Custom Days Addition</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="3650"
+                  value={extendDaysSelection}
+                  onChange={(e) => setExtendDaysSelection(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                />
+              </div>
+
+              {/* Live Preview of New Expiration Date */}
+              {(() => {
+                const base = extendModalLicense.expiration_date ? new Date(extendModalLicense.expiration_date) : new Date();
+                const d = base > new Date() ? new Date(base) : new Date();
+                d.setDate(d.getDate() + extendDaysSelection);
+                return (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs">
+                    <span className="text-emerald-800 font-semibold">New Expiration Date:</span>
+                    <strong className="text-emerald-900 font-mono text-sm">{formatDate(d.toISOString())}</strong>
+                  </div>
+                );
+              })()}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setExtendModalLicense(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const lic = extendModalLicense;
+                    const days = extendDaysSelection;
+                    setExtendModalLicense(null);
+                    await handleExtendDuration(lic, days);
+                  }}
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black shadow-md transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <Sparkles size={14} />
+                  <span>Apply +{extendDaysSelection} Days Extension</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ══════════════════════════════════════════════════════════════════
           EXTREME SUPER ULTRA DETAILED LOGOUT MODAL
